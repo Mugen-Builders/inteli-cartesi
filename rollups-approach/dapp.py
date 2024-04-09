@@ -5,25 +5,32 @@ import numpy as np
 import json
 import traceback
 
+
 class Transaction:
-    def __init__(self, sender: str, receiver: str, product_id: str, price: int, timestamp: int):
+    def __init__(self, _id: str, sender: str, receiver: str, product_id: str, price: int, quantity: int, timestamp: int):
+        self.id = _id
         self.sender = sender
         self.receiver = receiver
         self.product_id = product_id
         self.price = price
+        self.price_per_unit = price / quantity
+        self.quantity = quantity
         self.timestamp = timestamp
 
     def to_dict(self):
         return {
+            "id": self.id,
             "sender": self.sender,
             "receiver": self.receiver,
             "product_id": self.product_id,
             "price": self.price,
+            "price_per_unit": self.price_per_unit,
+            "quantity": self.quantity,
             "timestamp": self.timestamp
         }
 
-owner = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
+owner = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 confirmed_transactions = []
 not_confirmed_transactions = []
 users = []
@@ -33,8 +40,6 @@ logger = logging.getLogger(__name__)
 rollup_server = environ.get(
     "ROLLUP_HTTP_SERVER_URL", "http://127.0.0.1:8080/rollup")
 logger.info(f"HTTP rollup_server url is {rollup_server}")
-
-# Utility functions
 
 
 def str2hex(string):
@@ -55,7 +60,6 @@ def hex2binary(hexstr):
 
 def hex2str(hexstr):
     return hex2binary(hexstr).decode("utf-8")
-
 # HTTP API functions
 
 
@@ -74,40 +78,47 @@ def send_post(endpoint, json_data) -> None:
 
 
 def handle_advance(data):
-    logger.info(f"Receiving advance request with data {hex2str(data['payload'])} from {data['metadata']['msg_sender']}")
+    logger.info(
+        f"Receiving advance request with data {hex2str(data['payload'])} from {data['metadata']['msg_sender']}")
     binary = hex2str(data['payload'])
     json_data = json.loads(binary)
     logger.info(f"Received json data {json_data}")
     try:
         if json_data["method"] == "addNewUser" and data["metadata"]["msg_sender"] == owner.lower():
             users.append(json_data["data"])
-            notice_payload = {"payload": str2hex(f'Add new user {data["payload"]} to the list of users')}
-            send_notice(notice_payload)
-            return "accept"
-        elif json_data["method"] == "addNewTransaction":
-            tx = Transaction(
-                sender= data["metadata"]["msg_sender"],
-                receiver= json_data["data"]["receiver"].lower(),
-                product_id= json_data["data"]["product_id"],
-                price= json_data["data"]["price"],
-                timestamp= json_data["data"]["timestamp"]
-            )
-            not_confirmed_transactions.append(tx)
-            notice_payload = {"payload": str2hex(f'Add new transaction {data["payload"]} to the list of not confirmed transactions')}
+            notice_payload = {"payload": str2hex(
+                f'Add new user {data["payload"]} to the list of users')}
             send_notice(notice_payload)
             return "accept"
         elif json_data["method"] == "deleteUser" and data["metadata"]["msg_sender"] == owner.lower():
             users.remove(json_data["data"])
-            notice_payload = {"payload": str2hex(f'Delete user {data["payload"]} from the list of users')}
+            notice_payload = {"payload": str2hex(
+                f'Delete user {data["payload"]} from the list of users')}
+            send_notice(notice_payload)
+            return "accept"
+        elif json_data["method"] == "addNewTransaction":
+            tx = Transaction(
+                _id=json_data["data"]["id"],
+                sender=data["metadata"]["msg_sender"],
+                receiver=json_data["data"]["receiver"].lower(),
+                product_id=json_data["data"]["product_id"],
+                price=json_data["data"]["price"],
+                quantity=json_data["data"]["quantity"],
+                timestamp=json_data["data"]["timestamp"]
+            )
+            not_confirmed_transactions.append(tx)
+            notice_payload = {"payload": str2hex(
+                f'Add new transaction {data["payload"]} to the list of not confirmed transactions')}
             send_notice(notice_payload)
             return "accept"
         elif json_data['method'] == "validateTransaction":
             for transaction in not_confirmed_transactions:
-                if str(transaction.product_id) == str(json_data["data"]):
+                if str(transaction.id) == str(json_data["data"]):
                     if str(transaction.receiver) == str(data["metadata"]["msg_sender"]):
-                        confirmed_transactions.append(transaction)
                         not_confirmed_transactions.remove(transaction)
-                        notice_payload = {"payload": str2hex(f'Transaction {data["payload"]} confirmed')}
+                        confirmed_transactions.append(transaction)
+                        notice_payload = {"payload": str2hex(
+                            f'Transaction {data["payload"]} confirmed')}
                         send_notice(notice_payload)
             return "accept"
     except Exception as e:
@@ -127,25 +138,29 @@ def handle_inspect(data):
             send_report({"payload": str2hex(f'{report_payload}')})
             return "accept"
         if binary == "transactions/confirmed":
-            confirmed_transactions_data = [transaction.to_dict() for transaction in confirmed_transactions]
-            report_payload = {"confirmed_transactions": f"{confirmed_transactions_data}"}
+            confirmed_transactions_data = [
+                transaction.to_dict() for transaction in confirmed_transactions]
+            report_payload = {
+                "confirmed_transactions": f"{confirmed_transactions_data}"}
             send_report({"payload": str2hex(f'{report_payload}')})
             return "accept"
         if binary == "transactions/not_confirmed":
-            not_confirmed_transactions_data = [transaction.to_dict() for transaction in not_confirmed_transactions]
-            report_payload = {"not_confirmed_transactions": f"{not_confirmed_transactions_data}"}
+            not_confirmed_transactions_data = [
+                transaction.to_dict() for transaction in not_confirmed_transactions]
+            report_payload = {
+                "not_confirmed_transactions": f"{not_confirmed_transactions_data}"}
             send_report({"payload": str2hex(f'{report_payload}')})
             return "accept"
         if binary.split('/')[0] == 'mean':
             product_id = binary.split('/')[1]
-            product_prices_by_id = []
-            for transaction in confirmed_transactions:
-                if transaction['product_id'] == product_id:
-                    product_prices_by_id.append(transaction['price'])
-            mean_price = np.mean(product_prices_by_id)
-            report_payload = {"product_id": product_id,
-                              "mean_price": mean_price}
-            send_report({"payload": str2hex(report_payload)})
+            transaction_by_product_id = [transaction.to_dict(
+            ) for transaction in confirmed_transactions if transaction.product_id == product_id]
+            prices_by_id = [entry['price_per_unit']
+                            for entry in transaction_by_product_id]
+            mean_price_by_product_id = np.mean(prices_by_id)
+            report_payload = {"product_id": f"{product_id}",
+                              "mean_price": f"{mean_price_by_product_id}"}
+            send_report({"payload": str2hex(str(report_payload))})
             return "accept"
     except Exception as e:
         msg = f"Error {e} processing data {data}"

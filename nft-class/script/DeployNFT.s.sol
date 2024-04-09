@@ -10,6 +10,7 @@ contract DeployContracts is Script {
         bytes32 _salt = bytes32(abi.encode(2024));
         vm.startBroadcast();
         ERC721Inteli erc721 = new ERC721Inteli{salt: _salt}();
+        erc721.safeMint()
         vm.stopBroadcast();
         console.log(
             "ERC721Deroll address:",
